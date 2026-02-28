@@ -1,39 +1,60 @@
-"""Entry point for the context MCP server.
+"""Entry point for the local context MCP server.
 
-This module wires transport concerns (MCP protocol exposure) to application
-logic (context-building service). The comments are intentionally detailed so new
-contributors can understand the request flow end-to-end.
+This file intentionally exposes a *single high-level orchestration tool* instead
+of many low-level API-shaped tools.
+
+Why expose only one high-level tool?
+- Clients call this at session start and receive a coherent context bundle.
+- A single entrypoint keeps client prompts simpler and reduces sequencing errors
+  (e.g., fetching story data but forgetting related risks/open questions).
+- We can evolve internal composition later without breaking MCP clients.
+
+Why keep orchestration server-side?
+- The server can enforce one deterministic flow for data assembly and shaping.
+- Clients should not need to know integration ordering or transformation rules.
+- Future concerns (auth, retries, caching, observability) belong at this
+  boundary, not spread across every client implementation.
+
+Why no write/delete operations?
+- This server is currently read-only context preparation for coding sessions.
+- Excluding mutations avoids accidental side effects on source systems.
+- Read-only behavior is safer while integrations are still mocked and evolving.
 """
+
+import json
 
 from fastmcp import FastMCP
 
 from tools.context_tool import build_context_tool
 
-# Create the MCP server instance. `FastMCP` manages protocol handshake, tool
-# registration, argument validation, and response marshalling for us.
+# Initialize the MCP server instance so it can be run locally via:
+#   python server.py
 mcp = FastMCP(name="context-mcp")
 
 
-@mcp.tool(name="context.build_bundle")
+@mcp.tool(
+    name="context.build_bundle",
+    description=(
+        "Use this tool at the beginning of a coding session when working on a "
+        "Jira ticket. It gathers structured context before writing code."
+    ),
+)
 def context_build_bundle(jira_key: str) -> dict:
-    """Tool entrypoint for building a context bundle from a Jira key.
+    """Build a deterministic, JSON-serializable context bundle for one Jira key."""
 
-    Flow overview:
-    1. An MCP client invokes the `context.build_bundle` tool with `jira_key`.
-    2. FastMCP validates/coerces the argument according to this signature.
-    3. This handler delegates to `build_context_tool`, keeping server code thin.
-    4. `build_context_tool` uses `ContextBuilder` to assemble structured context.
-    5. A JSON-safe dictionary is returned through MCP back to the client.
+    print(f"[context-mcp] tool=context.build_bundle jira_key={jira_key}")
 
-    Keeping this wrapper small makes future migration easier when auth, tracing,
-    retries, or caching are introduced at the server boundary.
-    """
+    # Delegate to application logic (currently mocked/deterministic).
+    bundle_dict = build_context_tool(jira_key=jira_key)
 
-    return build_context_tool(jira_key=jira_key)
+    # Enforce strict JSON serializability before returning through MCP.
+    # `json.dumps` will raise if non-serializable types leak in.
+    json_ready_bundle = json.loads(json.dumps(bundle_dict))
+
+    print("[context-mcp] tool=context.build_bundle status=success")
+    return json_ready_bundle
 
 
 if __name__ == "__main__":
-    # Run the MCP server when executed directly. This allows local development
-    # via `python server.py` while still enabling import-based execution in tests
-    # or when embedded by other launch mechanisms.
+    print("[context-mcp] starting local MCP server")
     mcp.run()
